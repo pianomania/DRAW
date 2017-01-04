@@ -1,6 +1,9 @@
 import numpy as np
 import tensorflow as tf
 
+encoder = tf.nn.rnn_cell.LSTMCell(512)
+decoder = tf.nn.rnn_cell.LSTMCell(512)
+
 def linear(name, x, nout, reuse):
 
   with tf.variable_scope(name, reuse=reuse):
@@ -11,7 +14,14 @@ def linear(name, x, nout, reuse):
 
   return out
 
-def filterbank(N, A, B, gx, gy, delta, sigma):
+def err_image(x, canvas):
+
+  sigmoid_convas = tf.sigmoid(canvas)
+  err_image = x - sigmoid_convas
+  
+  return x - sigmoid_convas
+
+def filterbank(N, A, B, gx, gy, delta, var):
 
   i = tf.range(1, N+1, dtype=tf.float32)
   mu_x = gx + (i- N/2.0 - 0.5)*delta
@@ -23,56 +33,97 @@ def filterbank(N, A, B, gx, gy, delta, sigma):
   a = whole_x - tf.expand_dims(mu_x, -1) 
   b = whole_y - tf.expand_dims(mu_y, -1)
 
-  Fx = tf.exp(-tf.square(a)/tf.expand_dims(sigma, -1)/2.0)
-  Fy = tf.exp(-tf.square(b)/tf.expand_dims(sigma, -1)/2.0)
+  Fx = tf.exp(-tf.square(a)/tf.expand_dims(var, -1)/2.0)
+  Fy = tf.exp(-tf.square(b)/tf.expand_dims(var, -1)/2.0)
 
-  sum_Fx = tf.reduce_sum(Fx, axis=2, keep_dims=True)
-  sum_Fy = tf.reduce_sum(Fy, axis=2, keep_dims=True)
+  sum_Fx = tf.reduce_sum(Fx, axis=2, keep_dims=True)+1e-8
+  sum_Fy = tf.reduce_sum(Fy, axis=2, keep_dims=True)+1e-8
 
   Fx = Fx/sum_Fx
   Fy = Fy/sum_Fy
 
   return Fx, Fy
 
-def att_params(name, A, B, dec_hidden, reuse):
+def att_params(name, N, A, B, dec_hidden, reuse):
 
-  with tf.variable_scope(name):
-    params = linear('linear_transform', dec_hidden, 5, reuse)
+  params = linear(name, dec_hidden, 5, reuse)
 
-    gx_ = params[:,0]
-    gy_ = params[:,1]
-    log_sigma = params[:,2]
-    log_delta = params[:,3]
-    log_gamma = params[:,4]
+  gx_ = params[:,0]
+  gy_ = params[:,1]
+  log_var = params[:,2]
+  log_delta = params[:,3]
+  log_gamma = params[:,4]
 
-    gx = (A + 1)*(gx_ + 1) / 2
-    gy = (B + 1)*(gy_ + 1) / 2
-    gx = tf.reshape(gx, [-1, 1])
-    gy = tf.reshape(gy, [-1, 1])
-    sigma = tf.reshape(tf.exp(log_sigma), [-1, 1])
-    delta = tf.reshape(tf.exp(log_delta), [-1, 1])
-    gamma = tf.reshape(tf.exp(log_gamma), [-1, 1, 1])
+  var = tf.reshape(tf.exp(log_var), [-1, 1])
+  delta = tf.reshape(tf.exp(log_delta), [-1, 1])
+  gamma = tf.reshape(tf.exp(log_gamma), [-1, 1])
 
-  return gx, gy, sigma, delta, gamma
+  gx = (A + 1)*(gx_ + 1) / 2
+  gy = (B + 1)*(gy_ + 1) / 2
+  gx = tf.reshape(gx, [-1, 1])
+  gy = tf.reshape(gy, [-1, 1])
+  delta = (tf.maximum(A, B)-1) * delta / (N-1)
+
+  return gx, gy, var, delta, gamma
 
 def read(image, err_image, gamma, Fx, Fy):
+
+  N = Fx.get_shape().as_list()[1]
 
   p_image = tf.batch_matmul(tf.batch_matmul(Fy, image),
               tf.transpose(Fx, [0, 2, 1]))
   p_err_image = tf.batch_matmul(tf.batch_matmul(Fy, err_image), 
                 tf.transpose(Fx, [0, 2, 1]))
 
-  return tf.mul(gamma, tf.concat(2, [p_image, p_err_image]))
+  p_image = tf.reshape(p_image, [-1, N*N]) # flatten
+  p_err_image = tf.reshape(p_err_image, [-1, N*N]) # flatten
 
-def write(N, Fx, Fy, gamma, dec_hidden, reuse):
+  return tf.mul(gamma, tf.concat(1, [p_image, p_err_image]))
 
-  with tf.variable_scope('write'):
-    write_patch = linear('linear_transform', dec_hidden, N*N, reuse)
-    write_patch = tf.reshape(write_patch, [-1, N, N])
+def write(Fx, Fy, gamma, dec_hidden, reuse):
 
-    write = tf.batch_matmul(tf.transpose(Fy, [0, 2, 1]), write_patch)
-    write = tf.batch_matmul(write, Fx)
-    write = tf.mul(1.0/gamma, write)
+  N = Fx.get_shape().as_list()[1]
+
+  write_patch = linear('write', dec_hidden, N*N, reuse)
+  write_patch = tf.reshape(write_patch, [-1, N, N])
+
+  write = tf.batch_matmul(tf.transpose(Fy, [0, 2, 1]), write_patch)
+  write = tf.batch_matmul(write, Fx)
+  write = tf.mul(1.0/tf.expand_dims(gamma, -1), write)
 
   return write
 
+def encode(x, prev_state, reuse):
+  with tf.variable_scope('encoder', reuse=reuse):
+    enc_h, enc_state = encoder(x, prev_state)
+
+  return enc_h, enc_state
+
+def decode(x, prev_state, reuse):
+  with tf.variable_scope('decoder', reuse=reuse):
+    dec_h, dec_state = decoder(x, prev_state)
+
+  return dec_h, dec_state
+
+def latent_params(enc_h, z_size, reuse):
+
+  mu = linear('latent_mu', enc_h, z_size, reuse)
+  log_stddev = linear('latent_stddev', enc_h, z_size, reuse)
+  stddev = tf.exp(log_stddev)
+
+  batch_size = enc_h.get_shape().as_list()[0]
+  normal = tf.random_normal([batch_size, z_size])
+
+  sample = tf.add(mu, tf.mul(normal, stddev))
+
+  square_mu = tf.square(mu)
+  var = tf.square(stddev)
+  log_var = 2*log_stddev
+
+  return sample, square_mu, var, log_var
+
+def binary_cross_entropy(p, q):
+
+  eps = 1e-8
+
+  return -tf.mul(p, tf.log(q+eps)) - tf.mul(1.0-p, tf.log(1.0-q+eps))
