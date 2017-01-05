@@ -1,8 +1,8 @@
 import numpy as np
 import tensorflow as tf
 
-encoder = tf.nn.rnn_cell.LSTMCell(512)
-decoder = tf.nn.rnn_cell.LSTMCell(512)
+encoder = tf.nn.rnn_cell.LSTMCell(1024)
+decoder = tf.nn.rnn_cell.LSTMCell(1024)
 
 def linear(name, x, nout, reuse):
 
@@ -66,25 +66,39 @@ def att_params(name, N, A, B, dec_hidden, reuse):
 
   return gx, gy, var, delta, gamma
 
-def read(image, err_image, gamma, Fx, Fy):
+def _read(x, gamma, Fx, Fy):
+  'utility function for read of generating or classifying task'
+
+  N = Fx.get_shape().as_list()[1]
+  patch = tf.batch_matmul(tf.batch_matmul(Fy, x),
+              tf.transpose(Fx, [0, 2, 1]))
+
+  return patch
+
+def read(image, err_image, gamma, Fx, Fy, task='generating'):
 
   N = Fx.get_shape().as_list()[1]
 
-  p_image = tf.batch_matmul(tf.batch_matmul(Fy, image),
-              tf.transpose(Fx, [0, 2, 1]))
-  p_err_image = tf.batch_matmul(tf.batch_matmul(Fy, err_image), 
-                tf.transpose(Fx, [0, 2, 1]))
-
+  p_image = _read(image, gamma, Fx, Fy)
   p_image = tf.reshape(p_image, [-1, N*N]) # flatten
-  p_err_image = tf.reshape(p_err_image, [-1, N*N]) # flatten
 
-  return tf.mul(gamma, tf.concat(1, [p_image, p_err_image]))
+  if task == 'generating':
+    p_err_image = _read(err_image, gamma, Fx, Fy)
+    p_err_image = tf.reshape(p_err_image, [-1, N*N]) # flatten
+
+  if task == 'generating':
+    out = tf.mul(gamma, tf.concat(1, [p_image, p_err_image]))
+
+  elif task == 'classifying':
+    out = tf.mul(gamma, p_image)
+  
+  return out
 
 def write(Fx, Fy, gamma, dec_hidden, reuse):
 
   N = Fx.get_shape().as_list()[1]
 
-  write_patch = linear('write', dec_hidden, N*N, reuse)
+  write_patch = linear('w/write', dec_hidden, N*N, reuse)
   write_patch = tf.reshape(write_patch, [-1, N, N])
 
   write = tf.batch_matmul(tf.transpose(Fy, [0, 2, 1]), write_patch)
@@ -94,21 +108,21 @@ def write(Fx, Fy, gamma, dec_hidden, reuse):
   return write
 
 def encode(x, prev_state, reuse):
-  with tf.variable_scope('encoder', reuse=reuse):
+  with tf.variable_scope('r/encoder', reuse=reuse):
     enc_h, enc_state = encoder(x, prev_state)
 
   return enc_h, enc_state
 
 def decode(x, prev_state, reuse):
-  with tf.variable_scope('decoder', reuse=reuse):
+  with tf.variable_scope('w/decoder', reuse=reuse):
     dec_h, dec_state = decoder(x, prev_state)
 
   return dec_h, dec_state
 
 def latent_params(enc_h, z_size, reuse):
 
-  mu = linear('latent_mu', enc_h, z_size, reuse)
-  log_stddev = linear('latent_stddev', enc_h, z_size, reuse)
+  mu = linear('w/latent_mu', enc_h, z_size, reuse)
+  log_stddev = linear('w/latent_stddev', enc_h, z_size, reuse)
   stddev = tf.exp(log_stddev)
 
   batch_size = enc_h.get_shape().as_list()[0]
