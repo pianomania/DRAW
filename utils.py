@@ -1,8 +1,8 @@
 import numpy as np
 import tensorflow as tf
 
-encoder = tf.nn.rnn_cell.LSTMCell(1024)
-decoder = tf.nn.rnn_cell.LSTMCell(1024)
+encoder = tf.nn.rnn_cell.LSTMCell(256)
+decoder = tf.nn.rnn_cell.LSTMCell(256)
 
 def linear(name, x, nout, reuse):
 
