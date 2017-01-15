@@ -9,20 +9,21 @@ import matplotlib.patches as patches
 
 class DRAW(object):
 
-  def __init__(self, sess, N_r=12, N_w=12, A=28.0, B=28.0, maxT=32, z_size=100):
+  def __init__(self, sess, A=28.0, B=28.0, hps=None):
 
     self.sess = sess
-    self.N_r = N_r
-    self.N_w = N_w
     self.A = A
     self.B = B
-    self.maxT = maxT
-    self.z_size = z_size
 
-    self.iteration = 1000
+    self.N_r = N_r = hps['N_r']
+    self.N_w = N_w = hps['N_w']
+    self.nGlimpse = nGlimpse = hps['nGlimpse']
+    self.z_size = z_size = hps['z_size']
+    self.iteration = hps['iter']
+    self.lr = hps['lr']
     self.batch_size = 64
     self.GS = tf.Variable(0, trainable=False, name='global_stap')
-    self.lr = 1e-3
+    
 
     enc_state = encoder.zero_state(self.batch_size, dtype=tf.float32)
     dec_state = decoder.zero_state(self.batch_size, dtype=tf.float32)
@@ -33,7 +34,7 @@ class DRAW(object):
 
     self.image = tf.placeholder(tf.float32, [self.batch_size, 28, 28])
 
-    for step in xrange(maxT):
+    for step in xrange(nGlimpse):
       reuse = not (step == 0)
 
       image_hat = err_image(self.image, tf.sigmoid(canvas)) 
@@ -56,13 +57,13 @@ class DRAW(object):
       tf.add_to_collection('z_mu', z_mu)
       tf.add_to_collection('z_var', z_var)
       tf.add_to_collection('z_log_var', z_log_var)
-      tf.summary.histogram('z_distribution', z) # 
+      tf.summary.histogram('z_distribution', z)
 
     z_mu_sum = tf.reduce_sum(tf.get_collection('z_mu'), axis=0) 
     z_var_sum = tf.reduce_sum(tf.get_collection('z_var'), axis=0)
     z_log_var_sum = tf.reduce_sum(tf.get_collection('z_log_var'), axis=0)
 
-    batch_loss_z = 0.5*tf.reduce_sum(z_mu_sum + z_var_sum - z_log_var_sum - maxT, axis=1) 
+    batch_loss_z = 0.5*tf.reduce_sum(z_mu_sum + z_var_sum - z_log_var_sum - nGlimpse, axis=1) 
 
     self.loss_z = tf.reduce_mean(batch_loss_z)
 
@@ -73,19 +74,19 @@ class DRAW(object):
 
     optimizer = tf.train.AdamOptimizer(learning_rate=self.lr, beta1=0.5, beta2=0.75)
     gvs = optimizer.compute_gradients(self.loss)
-    capped_gvs = [(tf.clip_by_norm(grad, 1.0), var) for grad, var in gvs]
-    self.train_op = optimizer.apply_gradients(capped_gvs, global_step=self.GS)
+    self.train_op = optimizer.apply_gradients(gvs, global_step=self.GS)
 
 
     tf.summary.scalar('loss', self.loss)
     tf.summary.scalar('loss_x', self.loss_x)
     tf.summary.scalar('loss_z', self.loss_z)
+
     self.summary_op = tf.merge_all_summaries()
     self.summary_writer = tf.summary.FileWriter('/home/yao/DRAW/tmp/generate', sess.graph)
 
-    self.generate_()
+    self._generate()
 
-  def generate_(self):
+  def _generate(self):
 
     self.z_plh = tf.placeholder(tf.float32, [self.batch_size, self.z_size])
     self.c_plh = tf.placeholder(tf.float32, [self.batch_size, 256])
@@ -117,12 +118,16 @@ class DRAW(object):
 
       idx = np.random.permutation(data.shape[0])[:64]
 
-      loss_eval, loss_x, loss_z, summary, _ = self.sess.run(
-          [self.loss, self.loss_x, self.loss_z, self.summary_op, self.train_op], 
-          feed_dict={self.image: data[idx]})
+      self.sess.run(self.train_op, feed_dict={self.image: data[idx]})
+
+      if i % 100 == 0:
+        loss, loss_x, loss_z, summary = self.sess.run(
+            [self.loss, self.loss_x, self.loss_z, self.summary_op], 
+            feed_dict={self.image: data[idx]})
       
-      self.summary_writer.add_summary(summary, i)
-      print loss_eval
+        self.summary_writer.add_summary(summary, i)
+        print 'iert: %d, total loss: %f,  xloss: %f,  zloss: %f' \
+              % (i, loss, loss_x, loss_z)
 
   def draw(self):
 
@@ -131,16 +136,18 @@ class DRAW(object):
     h_state = np.zeros((self.batch_size, 256))
     np.seterr(over='ignore')
 
-    for step in range(self.maxT):
+    for step in range(self.nGlimpse):
       
       w, gx, gy, delta, var, c_state, h_state = self.sess.run(
-        [self.w,
+        [
+        self.w,
         self.gx_w,
         self.gy_w,
         self.delta_w,
         self.var_w,
         self.c_state,
-        self.h_state],
+        self.h_state
+        ],
         feed_dict={self.z_plh: np.random.randn(self.batch_size, self.z_size),
                    self.c_plh: c_state,
                    self.h_plh: h_state})
