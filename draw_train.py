@@ -22,8 +22,8 @@ data = train_set[0].reshape(-1, 28, 28)
 hps={}
 hps['iter'] = 40000
 hps['lr'] = 1e-3
-hps['N_r'] = 5
-hps['N_w'] = 5
+hps['N_r'] = 3
+hps['N_w'] = 3
 hps['nGlimpse'] = 48
 hps['z_size'] = 100
 
