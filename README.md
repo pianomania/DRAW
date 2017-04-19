@@ -4,6 +4,7 @@
 <img src="./assets/all.gif" width="400" hight='300'>
 
 **Total Loss**
+
 <img src="./assets/loss.jpg" width="600" hight='250'>
 
 **Reconstruction Loss**
