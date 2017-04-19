@@ -1,7 +1,7 @@
 **DRAW: A Recurrent Neural Network For Image Generation** <br />
 
 # results
-![result](./assets/all.gif =400x300)
+![result](./assets/all.gif){:height="400px" width="300px"}
 **Total Loss**
 ![Total loss](./assets/loss.jpg =600x250)
 **Reconstruction Loss**
